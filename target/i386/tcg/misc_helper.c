@@ -149,6 +149,7 @@ target_ulong HELPER(rdpid)(CPUX86State *env)
 #include "exec/helper-proto.h"
 #include "accel/tcg/cpu-ldst.h"
 
+
 void helper_custom_fast_fma(CPUX86State *env, uint32_t dest, uint32_t src1, uint32_t src2, target_ulong vaddr, uint32_t flags) {
     // 获取宿主机的指令返回地址，极速访问内存发生缺页时，能精准恢复虚拟机上下文
     uintptr_t ra = GETPC(); 
@@ -215,20 +216,29 @@ void helper_custom_fast_fma(CPUX86State *env, uint32_t dest, uint32_t src1, uint
 }
 
 
+
+
+
 uint64_t helper_custom_fma_chunk(uint64_t d, uint64_t a, uint64_t b, uint32_t flags) {
     uint32_t opcode = flags & 0xFF;
     uint32_t w_bit = (flags >> 8) & 1;
+    uint32_t chunk_idx = (flags >> 16) & 0xFF;
+
+    bool is_scalar = (opcode == 0x99 || opcode == 0xA9 || opcode == 0xB9);
 
     if (w_bit == 1) { 
         // 64位数据包含 1 个 double
         union { uint64_t i; double f; } vd, va, vb, vres;
         vd.i = d; va.i = a; vb.i = b;
         
-        if (opcode == 0xB8) vres.f = (va.f * vb.f) + vd.f;
-        else if (opcode == 0xA8) vres.f = (vd.f * va.f) + vb.f;
-        else if (opcode == 0x98) vres.f = (vd.f * vb.f) + va.f;
-        else vres.f = vd.f;
-        
+	if(is_scalar && chunk_idx > 0){
+	    vres.f = vd.f;
+	}else{
+            if (opcode == 0xB8) vres.f = (va.f * vb.f) + vd.f;
+            else if (opcode == 0xA8) vres.f = (vd.f * va.f) + vb.f;
+            else if (opcode == 0x98) vres.f = (vd.f * vb.f) + va.f;
+            else vres.f = vd.f;
+	}
         return vres.i;
     } else { 
         // 64位数据包含 2 个 float
@@ -236,10 +246,14 @@ uint64_t helper_custom_fma_chunk(uint64_t d, uint64_t a, uint64_t b, uint32_t fl
         vd.i = d; va.i = a; vb.i = b;
         
         for (int j = 0; j < 2; j++) {
-            if (opcode == 0xB8) vres.f[j] = (va.f[j] * vb.f[j]) + vd.f[j];
-            else if (opcode == 0xA8) vres.f[j] = (vd.f[j] * va.f[j]) + vb.f[j];
-            else if (opcode == 0x98) vres.f[j] = (vd.f[j] * vb.f[j]) + va.f[j];
-            else vres.f[j] = vd.f[j];
+	    if(is_scalar && (chunk_idx > 0 || j > 0)){
+		vres.f[j] = vd.f[j];
+	    }else{
+                if (opcode == 0xB8) vres.f[j] = (va.f[j] * vb.f[j]) + vd.f[j];
+                else if (opcode == 0xA8) vres.f[j] = (vd.f[j] * va.f[j]) + vb.f[j];
+                else if (opcode == 0x98) vres.f[j] = (vd.f[j] * vb.f[j]) + va.f[j];
+                else vres.f[j] = vd.f[j];
+	    }
         }
         
         return vres.i;

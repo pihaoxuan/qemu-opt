@@ -3551,8 +3551,8 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
 			uint32_t aofs = offsetof(CPUX86State, xmm_regs[reg_src1]);
 			uint32_t bofs = 0;
 
-			uint32_t flags = opcode | (w_bit << 8);
-			TCGv_i32 t_flags = tcg_constant_i32(flags);
+			// uint32_t flags = opcode | (w_bit << 8);
+			// TCGv_i32 t_flags = tcg_constant_i32(flags);
 			
 			// 决定需要切分多少个 64-bit 块 (YMM 为 4 块, XMM 为 2 块)
 			int chunks = (l_bit == 1) ? 4 : 2;
@@ -3622,9 +3622,13 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
 					tcg_gen_movi_tl(A0, disp); 
 				}
 			}
+			
 
+			uint32_t base_flags = opcode | (w_bit << 8);
 			// 核心切片循环：每次处理 64-bit
 			for (int i = 0; i < chunks; i++) {
+			        uint32_t current_flags = base_flags | (i << 16);
+				TCGv_i32 t_flags = tcg_constant_i32(current_flags);
 				// 从寄存器偏移处读取 64 位块
 				tcg_gen_ld_i64(t_d, tcg_env, dofs + i * 8);
 				tcg_gen_ld_i64(t_a, tcg_env, aofs + i * 8);
