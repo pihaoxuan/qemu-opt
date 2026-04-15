@@ -148,7 +148,7 @@ target_ulong HELPER(rdpid)(CPUX86State *env)
 #include "cpu.h"
 #include "exec/helper-proto.h"
 #include "accel/tcg/cpu-ldst.h"
-
+#include <math.h>
 
 void helper_custom_fast_fma(CPUX86State *env, uint32_t dest, uint32_t src1, uint32_t src2, target_ulong vaddr, uint32_t flags) {
     // 获取宿主机的指令返回地址，极速访问内存发生缺页时，能精准恢复虚拟机上下文
@@ -234,9 +234,9 @@ uint64_t helper_custom_fma_chunk(uint64_t d, uint64_t a, uint64_t b, uint32_t fl
 	if(is_scalar && chunk_idx > 0){
 	    vres.f = vd.f;
 	}else{
-            if (opcode == 0xB8) vres.f = (va.f * vb.f) + vd.f;
-            else if (opcode == 0xA8) vres.f = (vd.f * va.f) + vb.f;
-            else if (opcode == 0x98) vres.f = (vd.f * vb.f) + va.f;
+            if (opcode == 0xB8) vres.f = fma(va.f, vb.f, vd.f);
+            else if (opcode == 0xA8) vres.f = fma(vd.f, va.f, vb.f);
+            else if (opcode == 0x98) vres.f = fma(vd.f, vb.f, va.f);
             else vres.f = vd.f;
 	}
         return vres.i;
@@ -249,9 +249,9 @@ uint64_t helper_custom_fma_chunk(uint64_t d, uint64_t a, uint64_t b, uint32_t fl
 	    if(is_scalar && (chunk_idx > 0 || j > 0)){
 		vres.f[j] = vd.f[j];
 	    }else{
-                if (opcode == 0xB8) vres.f[j] = (va.f[j] * vb.f[j]) + vd.f[j];
-                else if (opcode == 0xA8) vres.f[j] = (vd.f[j] * va.f[j]) + vb.f[j];
-                else if (opcode == 0x98) vres.f[j] = (vd.f[j] * vb.f[j]) + va.f[j];
+                if (opcode == 0xB8) vres.f[j] = fmaf(va.f[j], vb.f[j], vd.f[j]);
+                else if (opcode == 0xA8) vres.f[j] = fmaf(vd.f[j], va.f[j], vb.f[j]);
+                else if (opcode == 0x98) vres.f[j] = fmaf(vd.f[j], vb.f[j], va.f[j]);
                 else vres.f[j] = vd.f[j];
 	    }
         }
