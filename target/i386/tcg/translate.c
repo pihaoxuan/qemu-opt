@@ -3515,158 +3515,133 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
     target_ulong orig_pc_save = dc->pc_save;
 
 // ========= opt fma context ========
-	target_ulong pc_next = dc->base.pc_next;
-	static bool detector_inited = false;
+    target_ulong pc_next = dc->base.pc_next;
+    static bool detector_inited = false;
 
-	if(!detector_inited ){
-		init_gemm_detector();
-		detector_inited = true;
-	}
+    if(!detector_inited ){
+        init_gemm_detector();
+        detector_inited = true;
+    }
 
-	GEMMBlockMeta *meta = getMeta(pc_next);
+    GEMMBlockMeta *meta = getMeta(pc_next);
 
-	if(meta != NULL && meta->is_gemm_loop){
-		CPUX86State *env = cpu_env(cpu);
-		int cursor = 0;
-		
-		uint8_t byte0 = translator_ldub(env, &dc->base, pc_next + cursor++);
-		
-		if (byte0 == 0xC4) {
-			uint8_t byte1 = translator_ldub(env, &dc->base, pc_next + cursor++);
-			uint8_t byte2 = translator_ldub(env, &dc->base, pc_next + cursor++);
-			uint8_t opcode = translator_ldub(env, &dc->base, pc_next + cursor++);
-			uint8_t modrm = translator_ldub(env, &dc->base, pc_next + cursor++);
-			
-			uint8_t r_bit = (~byte1 >> 7) & 1;
-			uint8_t x_bit = (~byte1 >> 6) & 1;
-			uint8_t b_bit = (~byte1 >> 5) & 1;
-			uint8_t mod = (modrm >> 6) & 0x03;
-			uint8_t reg_dest = ((modrm >> 3) & 0x07) | (r_bit << 3);
-			uint8_t reg_src1 = (~byte2 >> 3) & 0x0F;
-			uint8_t rm = modrm & 0x07;
-			uint8_t w_bit = (byte2 >> 7) & 1; 
-			uint8_t l_bit = (byte2 >> 2) & 1; 
-			
-			uint32_t dofs = offsetof(CPUX86State, xmm_regs[reg_dest]);
-			uint32_t aofs = offsetof(CPUX86State, xmm_regs[reg_src1]);
-			uint32_t bofs = 0;
+    if(meta != NULL && meta->is_gemm_loop){
+        CPUX86State *env = cpu_env(cpu);
+        int cursor = 0;
+        
+        uint8_t byte0 = translator_ldub(env, &dc->base, pc_next + cursor++);
+        
+        if (byte0 == 0xC4) {
+            uint8_t byte1 = translator_ldub(env, &dc->base, pc_next + cursor++);
+            uint8_t byte2 = translator_ldub(env, &dc->base, pc_next + cursor++);
+            uint8_t opcode = translator_ldub(env, &dc->base, pc_next + cursor++);
+            uint8_t modrm = translator_ldub(env, &dc->base, pc_next + cursor++);
+            
+            uint8_t r_bit = (~byte1 >> 7) & 1;
+            uint8_t x_bit = (~byte1 >> 6) & 1;
+            uint8_t b_bit = (~byte1 >> 5) & 1;
+            uint8_t mod = (modrm >> 6) & 0x03;
+            uint8_t reg_dest = ((modrm >> 3) & 0x07) | (r_bit << 3);
+            uint8_t reg_src1 = (~byte2 >> 3) & 0x0F;
+            uint8_t rm = modrm & 0x07;
+            uint8_t w_bit = (byte2 >> 7) & 1; 
+            uint8_t l_bit = (byte2 >> 2) & 1; 
+            
+            uint32_t dofs = offsetof(CPUX86State, xmm_regs[reg_dest]);
+            uint32_t aofs = offsetof(CPUX86State, xmm_regs[reg_src1]);
+            uint32_t bofs = 0;
 
-			// uint32_t flags = opcode | (w_bit << 8);
-			// TCGv_i32 t_flags = tcg_constant_i32(flags);
-			
-			// 决定需要切分多少个 64-bit 块 (YMM 为 4 块, XMM 为 2 块)
-			int chunks = (l_bit == 1) ? 4 : 2;
+            TCGv A0 = NULL;
 
-			TCGv_i64 t_d = tcg_temp_new_i64();
-			TCGv_i64 t_a = tcg_temp_new_i64();
-			TCGv_i64 t_b = tcg_temp_new_i64();
-			TCGv_i64 t_res = tcg_temp_new_i64();
-			
-			TCGv A0 = NULL;
+            if (mod == 3) {
+                uint8_t reg_src2 = rm | (b_bit << 3);
+                bofs = offsetof(CPUX86State, xmm_regs[reg_src2]);
+            } else {
+                uint8_t base_reg = rm | (b_bit << 3);
+                uint8_t index_reg = 0xFF;
+                uint8_t scale = 0;
+                int32_t disp = 0;
 
-			if (mod == 3) {
-				uint8_t reg_src2 = rm | (b_bit << 3);
-				bofs = offsetof(CPUX86State, xmm_regs[reg_src2]);
-			} else {
-				// SIB/Disp 内存寻址计算
-				uint8_t base_reg = rm | (b_bit << 3);
-				uint8_t index_reg = 0xFF;
-				uint8_t scale = 0;
-				int32_t disp = 0;
+                if (rm == 4) { 
+                    uint8_t sib = translator_ldub(env, &dc->base, pc_next + cursor++);
+                    scale = (sib >> 6) & 0x03;
+                    index_reg = ((sib >> 3) & 0x07) | (x_bit << 3);
+                    base_reg = (sib & 0x07) | (b_bit << 3);
+                    if (mod == 0 && (base_reg & 7) == 5) {
+                        base_reg = 0xFF;
+                        uint32_t d0 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                        uint32_t d1 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                        uint32_t d2 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                        uint32_t d3 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                        disp = (int32_t)(d0 | (d1 << 8) | (d2 << 16) | (d3 << 24));
+                    }
+                } else if (mod == 0 && rm == 5) { 
+                    base_reg = 0xFF;
+                    uint32_t d0 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                    uint32_t d1 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                    uint32_t d2 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                    uint32_t d3 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                    disp = (int32_t)(d0 | (d1 << 8) | (d2 << 16) | (d3 << 24));
+                    disp += (pc_next + meta->length); 
+                }
 
-				if (rm == 4) { 
-					uint8_t sib = translator_ldub(env, &dc->base, pc_next + cursor++);
-					scale = (sib >> 6) & 0x03;
-					index_reg = ((sib >> 3) & 0x07) | (x_bit << 3);
-					base_reg = (sib & 0x07) | (b_bit << 3);
-					if (mod == 0 && (base_reg & 7) == 5) {
-						base_reg = 0xFF;
-						uint32_t d0 = translator_ldub(env, &dc->base, pc_next + cursor++);
-						uint32_t d1 = translator_ldub(env, &dc->base, pc_next + cursor++);
-						uint32_t d2 = translator_ldub(env, &dc->base, pc_next + cursor++);
-						uint32_t d3 = translator_ldub(env, &dc->base, pc_next + cursor++);
-						disp = (int32_t)(d0 | (d1 << 8) | (d2 << 16) | (d3 << 24));
-					}
-				} else if (mod == 0 && rm == 5) { 
-					base_reg = 0xFF;
-					uint32_t d0 = translator_ldub(env, &dc->base, pc_next + cursor++);
-					uint32_t d1 = translator_ldub(env, &dc->base, pc_next + cursor++);
-					uint32_t d2 = translator_ldub(env, &dc->base, pc_next + cursor++);
-					uint32_t d3 = translator_ldub(env, &dc->base, pc_next + cursor++);
-					disp = (int32_t)(d0 | (d1 << 8) | (d2 << 16) | (d3 << 24));
-					disp += (pc_next + meta->length); 
-				}
+                if (mod == 1) {
+                    disp = (int8_t)translator_ldub(env, &dc->base, pc_next + cursor++);
+                } else if (mod == 2) {
+                    uint32_t d0 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                    uint32_t d1 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                    uint32_t d2 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                    uint32_t d3 = translator_ldub(env, &dc->base, pc_next + cursor++);
+                    disp = (int32_t)(d0 | (d1 << 8) | (d2 << 16) | (d3 << 24));
+                }
 
-				if (mod == 1) {
-					disp = (int8_t)translator_ldub(env, &dc->base, pc_next + cursor++);
-				} else if (mod == 2) {
-					uint32_t d0 = translator_ldub(env, &dc->base, pc_next + cursor++);
-					uint32_t d1 = translator_ldub(env, &dc->base, pc_next + cursor++);
-					uint32_t d2 = translator_ldub(env, &dc->base, pc_next + cursor++);
-					uint32_t d3 = translator_ldub(env, &dc->base, pc_next + cursor++);
-					disp = (int32_t)(d0 | (d1 << 8) | (d2 << 16) | (d3 << 24));
-				}
+                A0 = tcg_temp_new();
+                if (!(mod == 0 && rm == 5)) { 
+                    if (base_reg != 0xFF) tcg_gen_mov_tl(A0, cpu_regs[base_reg]);
+                    else tcg_gen_movi_tl(A0, 0);
 
-				A0 = tcg_temp_new();
-				if (!(mod == 0 && rm == 5)) { 
-					if (base_reg != 0xFF) tcg_gen_mov_tl(A0, cpu_regs[base_reg]);
-					else tcg_gen_movi_tl(A0, 0);
+                    if (index_reg != 0xFF && index_reg != 4) {
+                        TCGv t_idx = tcg_temp_new();
+                        tcg_gen_shli_tl(t_idx, cpu_regs[index_reg], scale);
+                        tcg_gen_add_tl(A0, A0, t_idx);
+                    }
+                    if (disp != 0) tcg_gen_addi_tl(A0, A0, disp);
+                } else {
+                    tcg_gen_movi_tl(A0, disp); 
+                }
+            }
+            
+            // 【核心修改点】：将原先的多次拆分调用改为一次向量化 Helper 调用
+            // Flags 打包：包含 opcode, w_bit (Double/Float) 和 l_bit (256/128位)
+            uint32_t flags = opcode | (w_bit << 8) | (l_bit << 9);
+            TCGv_i32 t_flags = tcg_constant_i32(flags);
+            TCGv_i32 t_dofs = tcg_constant_i32(dofs);
+            TCGv_i32 t_aofs = tcg_constant_i32(aofs);
 
-					if (index_reg != 0xFF && index_reg != 4) {
-						TCGv t_idx = tcg_temp_new();
-						tcg_gen_shli_tl(t_idx, cpu_regs[index_reg], scale);
-						tcg_gen_add_tl(A0, A0, t_idx);
-					}
-					if (disp != 0) tcg_gen_addi_tl(A0, A0, disp);
-				} else {
-					tcg_gen_movi_tl(A0, disp); 
-				}
-			}
-			
+            if (mod == 3) {
+                TCGv_i32 t_bofs = tcg_constant_i32(bofs);
+                gen_helper_custom_fma_vector_reg(tcg_env, t_dofs, t_aofs, t_bofs, t_flags);
+            } else {
+                // A0 是计算好的 Guest 虚拟地址，直接传给 Memory Helper
+                gen_helper_custom_fma_vector_mem(tcg_env, t_dofs, t_aofs, A0, t_flags);
+            }
 
-			uint32_t base_flags = opcode | (w_bit << 8);
-			// 核心切片循环：每次处理 64-bit
-			for (int i = 0; i < chunks; i++) {
-			        uint32_t current_flags = base_flags | (i << 16);
-				TCGv_i32 t_flags = tcg_constant_i32(current_flags);
-				// 从寄存器偏移处读取 64 位块
-				tcg_gen_ld_i64(t_d, tcg_env, dofs + i * 8);
-				tcg_gen_ld_i64(t_a, tcg_env, aofs + i * 8);
-				
-				if (mod == 3) {
-					// 如果是寄存器操作数，直接从 CPUState 读取
-					tcg_gen_ld_i64(t_b, tcg_env, bofs + i * 8);
-				} else {
-					// 如果是内存操作数，使用 TCG 软 MMU 加载机制
-					tcg_gen_qemu_ld_i64(t_b, A0, dc->mem_index, MO_LEUQ);
-					if (i < chunks - 1) {
-						tcg_gen_addi_tl(A0, A0, 8); // 地址步进 8 字节
-					}
-				}
-
-				// 调用纯数学 Helper
-				gen_helper_custom_fma_chunk(t_res, t_d, t_a, t_b, t_flags);
-
-				// 将计算结果写回目标寄存器
-				tcg_gen_st_i64(t_res, tcg_env, dofs + i * 8);
-			}
-
-			if (chunks == 2) {
-			    uint32_t high_ofs = offsetof(CPUX86State, xmm_regs[reg_dest]) +16;	
-			    tcg_gen_gvec_dup_imm(MO_64, high_ofs, 16, 16, 0);
-			}
-		
-		    dc->base.pc_next = pc_next + meta->length;
-		    dc->pc = dc->base.pc_next;
-		    gen_update_eip_next(dc);
-		    dc->base.is_jmp = DISAS_TOO_MANY;
-		    return;
-		}	
-	}
+            // VEX 编码规范：如果 l_bit == 0 (即 128 位指令操作 YMM)，需要将目标寄存器高 128 位清零
+            if (l_bit == 0) {
+                uint32_t high_ofs = offsetof(CPUX86State, xmm_regs[reg_dest]) + 16;  
+                tcg_gen_gvec_dup_imm(MO_64, high_ofs, 16, 16, 0);
+            }
+        
+            dc->base.pc_next = pc_next + meta->length;
+            dc->pc = dc->base.pc_next;
+            gen_update_eip_next(dc);
+            dc->base.is_jmp = DISAS_TOO_MANY;
+            return;
+        }    
+    }
 // ======== opt fma context ========
 
-
-
+// ... 原有的异常处理和 switch 结构 ...
 
 #ifdef TARGET_VSYSCALL_PAGE
     /*
