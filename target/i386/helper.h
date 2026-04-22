@@ -212,9 +212,11 @@ DEF_HELPER_1(emms, void, env)
 DEF_HELPER_1(rdrand, tl, env)
 
 // opt fma
-DEF_HELPER_6(custom_fast_fma, void, env, i32, i32, i32, tl, i32)
+//DEF_HELPER_6(custom_fast_fma, void, env, i32, i32, i32, tl, i32)
 
 // fma 纯计算函数
 // 参数：函数名 不读写全局寄存器标识 dest src1 src2 flags
-DEF_HELPER_FLAGS_4(custom_fma_chunk, TCG_CALL_NO_RWG_SE, i64, i64, i64, i64, i32)
-
+//DEF_HELPER_FLAGS_4(custom_fma_chunk, TCG_CALL_NO_RWG_SE, i64, i64, i64, i64, i32)
+/* FMA Vector Optimization Helpers */
+DEF_HELPER_5(custom_fma_vector_reg, void, env, i32, i32, i32, i32)
+DEF_HELPER_5(custom_fma_vector_mem, void, env, i32, i32, tl, i32)
