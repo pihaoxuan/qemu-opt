@@ -3509,6 +3509,14 @@ uint64_t my_demo_guest_base = 0;
 
 static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
 {
+// ===== 运行时总指令计数（仅用于测量，测完删除）=====
+//    TCGv_ptr  t_ptr = tcg_constant_ptr(&g_total_insn_exec);
+//    TCGv_i64  t_val = tcg_temp_new_i64();
+//    tcg_gen_ld_i64(t_val, t_ptr, 0);
+//    tcg_gen_addi_i64(t_val, t_val, 1);
+//    tcg_gen_st_i64(t_val, t_ptr, 0);
+//    tcg_temp_free_i64(t_val);
+// ===== END 运行时总指令计数 =====
     DisasContext *dc = container_of(dcbase, DisasContext, base);
     bool orig_cc_op_dirty = dc->cc_op_dirty;
     CCOp orig_cc_op = dc->cc_op;
@@ -3640,8 +3648,6 @@ static void i386_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
         }    
     }
 // ======== opt fma context ========
-
-// ... 原有的异常处理和 switch 结构 ...
 
 #ifdef TARGET_VSYSCALL_PAGE
     /*
