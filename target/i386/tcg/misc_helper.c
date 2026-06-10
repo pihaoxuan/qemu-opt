@@ -24,6 +24,10 @@
 #include "exec/cputlb.h"
 #include "helper-tcg.h"
 
+
+/* MXCSR bits that affect FMA computation results */
+#define MXCSR_FP_NONDEFAULT  0xE040U   /* RC[14:13], FTZ[15], DAZ[6] */
+
 /*
  * NOTE: the translator must set DisasContext.cc_op to CC_OP_EFLAGS
  * after generating a call to a helper that uses this.
@@ -269,6 +273,36 @@ target_ulong HELPER(rdpid)(CPUX86State *env)
 // 处理纯寄存器操作数的 Helper
 // ====================================================================
 void helper_custom_fma_vector_reg(CPUX86State *env, uint32_t dofs, uint32_t aofs, uint32_t bofs, uint32_t flags) {
+    /* --- MXCSR 守卫：非默认 FP 环境 → 回退至软浮点 --- */
+    if (unlikely(env->mxcsr & MXCSR_FP_NONDEFAULT)) {
+        uint32_t opcode = flags & 0xFF;
+        uint32_t w_bit  = (flags >> 8) & 1;
+        uint32_t l_bit  = (flags >> 9) & 1;
+        ZMMReg *dreg = (ZMMReg *)((uint8_t *)env + dofs);
+        ZMMReg *areg = (ZMMReg *)((uint8_t *)env + aofs);
+        ZMMReg *breg = (ZMMReg *)((uint8_t *)env + bofs);
+        int n = l_bit ? (w_bit ? 4 : 8) : (w_bit ? 2 : 4);
+        for (int i = 0; i < n; i++) {
+            if (w_bit) {
+                float64 d = dreg->ZMM_Q(i), a = areg->ZMM_Q(i), b = breg->ZMM_Q(i), r;
+                if      (opcode == 0xB8) r = float64_muladd(a, b, d, 0, &env->sse_status);
+                else if (opcode == 0xA8) r = float64_muladd(d, a, b, 0, &env->sse_status);
+                else if (opcode == 0x98) r = float64_muladd(d, b, a, 0, &env->sse_status);
+                else r = d;
+                dreg->ZMM_Q(i) = r;
+            } else {
+                float32 d = dreg->ZMM_L(i), a = areg->ZMM_L(i), b = breg->ZMM_L(i), r;
+                if      (opcode == 0xB8) r = float32_muladd(a, b, d, 0, &env->sse_status);
+                else if (opcode == 0xA8) r = float32_muladd(d, a, b, 0, &env->sse_status);
+                else if (opcode == 0x98) r = float32_muladd(d, b, a, 0, &env->sse_status);
+                else r = d;
+                dreg->ZMM_L(i) = r;
+            }
+        }
+        return;   /* 跳过 LASX/LSX 快速路径 */
+    }
+    /* --- 守卫结束 --- */
+    
     uint32_t opcode = flags & 0xFF;
     uint32_t w_bit = (flags >> 8) & 1;
     uint32_t l_bit = (flags >> 9) & 1;
