@@ -267,6 +267,7 @@ target_ulong HELPER(rdpid)(CPUX86State *env)
 
 #include <lasxintrin.h> // 龙芯 256-bit 向量指令集 (LASX)
 #include <lsxintrin.h>  // 龙芯 128-bit 向量指令集 (LSX)
+#include "fpu/softfloat.h"
 // #include "exec/cpu_ldst.h" // 需要用到内存访问接口和 GETPC()
 
 // ====================================================================
