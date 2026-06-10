@@ -412,6 +412,35 @@ void helper_custom_fma_vector_mem(CPUX86State *env, uint32_t dofs, uint32_t aofs
     void *pa = (void *)env + aofs;
     void *pb = (void *)mem_buf; // 将读入的内存作为操作数 b
 
+    /* --- MXCSR 守卫：内存读完后检查，非默认 FP 环境 → 软浮点回退 --- */
+    if (unlikely(env->mxcsr & MXCSR_FP_NONDEFAULT)) {
+        ZMMReg *dreg = (ZMMReg *)pd;
+        ZMMReg *areg = (ZMMReg *)pa;
+        ZMMReg *breg = (ZMMReg *)mem_buf;  /* 内存操作数已就位 */
+        int n = l_bit ? (w_bit ? 4 : 8) : (w_bit ? 2 : 4);
+        for (int i = 0; i < n; i++) {
+            if (w_bit) {
+                float64 d = dreg->ZMM_Q(i), a = areg->ZMM_Q(i),
+                        b = breg->ZMM_Q(i), r;
+                if      (opcode == 0xB8) r = float64_muladd(a, b, d, 0, &env->sse_status);
+                else if (opcode == 0xA8) r = float64_muladd(d, a, b, 0, &env->sse_status);
+                else if (opcode == 0x98) r = float64_muladd(d, b, a, 0, &env->sse_status);
+                else r = d;
+                dreg->ZMM_Q(i) = r;
+            } else {
+                float32 d = dreg->ZMM_L(i), a = areg->ZMM_L(i),
+                        b = breg->ZMM_L(i), r;
+                if      (opcode == 0xB8) r = float32_muladd(a, b, d, 0, &env->sse_status);
+                else if (opcode == 0xA8) r = float32_muladd(d, a, b, 0, &env->sse_status);
+                else if (opcode == 0x98) r = float32_muladd(d, b, a, 0, &env->sse_status);
+                else r = d;
+                dreg->ZMM_L(i) = r;
+            }
+        }
+        return;   /* 跳过 LASX/LSX 快速路径 */
+    }
+    /* --- 守卫结束 --- */
+
     // -------- 接下来的计算逻辑与 Register Helper 完全一致 --------
     if (l_bit == 1) { // 256-bit YMM (LASX)
         if (w_bit == 1) {
